@@ -1,0 +1,202 @@
+---
+title: "Heart Stroke Prediction"
+author: "Prathyusha Parimi"
+date: "2022-12-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Installing Libraries
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(caret)
+library(pROC)
+library(imbalance)
+```
+
+## Data
+
+```{r}
+data <- read.csv("healthcare-dataset-stroke-data.csv", na.strings = c('N/A'))
+data <- as.data.table(data)
+```
+
+## Data Cleaning
+
+```{r}
+data$id <- NULL
+colnames(data)[colSums(is.na(data)) > 0]
+mean_bmi_per_gender <- data %>% group_by(gender) %>% summarise(bmi = mean(bmi, na.rm = TRUE))
+```
+
+```{r}
+data[gender == 'Female' & is.na(data$bmi), bmi := mean_bmi_per_gender[1, 'bmi']]
+data[gender == 'Male'   & is.na(data$bmi), bmi := mean_bmi_per_gender[2, 'bmi']]
+data[gender == 'Other'  & is.na(data$bmi), bmi := mean_bmi_per_gender[3, 'bmi']]
+```
+
+## Data Exploration
+
+```{r}
+colors <- c("tomato", "royalblue", "olivedrab1")
+tbl <- with(data, table(gender, stroke))
+barplot(tbl, legend = TRUE, beside = TRUE, col = colors,
+        names.arg = c("No Stroke", "Stroke"), main = "Stroke events by gender")
+```
+
+```{r}
+colors <- c("tomato", "royalblue", "olivedrab1", "mediumpurple", "turquoise")
+tbl <- with(data, table(work_type, stroke))
+barplot(tbl, legend = TRUE, beside = TRUE, col = colors,
+        names.arg = c("No Stroke", "Stroke"), main = "Stroke events by patient's work type")
+barplot(tbl[, 2], col = colors, main = "Confirmed stroke events by patient's work type")
+```
+
+```{r}
+colors <- c("tomato", "royalblue")
+tbl <- with(data, table(Residence_type, stroke))
+barplot(tbl, legend = TRUE, beside = TRUE, col = colors, 
+        names.arg = c("No Stroke", "Stroke"),
+        main = "Stroke events by patient's Residence type")
+barplot(tbl[, 2], col = colors,
+        main = "Confirmed stroke events by patient's Residence type")
+```
+
+```{r}
+tbl <- with(data, table(age, stroke))
+barplot(tbl[, 1], col = "royalblue", main = "Patients without stroke by age")
+barplot(tbl[, 2], col = "tomato", main = "Patients with stroke events by age")
+```
+
+```{r}
+colors <- c("tomato", "royalblue", "olivedrab1", "mediumpurple")
+tbl <- with(data, table(smoking_status, stroke))
+barplot(tbl, legend = TRUE, beside = TRUE, col = colors,
+        names.arg = c("No Stroke", "Stroke"), main = "Stroke events by smoking habits")
+barplot(tbl[, 2], col = colors, 
+        main = "Confirmed stroke events by smoking habits")
+```
+```{r}
+colors <- c("royalblue", "tomato")
+tbl <- with(data, table(hypertension, stroke))
+barplot(tbl, legend = TRUE, legend.text = c("Hypertension", "No Hypertension"), 
+        beside = TRUE, col = colors,
+        names.arg = c("No Stroke", "Stroke"), 
+        main = "Stroke events by hypertension diagnosis")
+barplot(tbl[, 2], col = colors,
+        main = "Confirmed stroke events by hypertension diagnosis",
+        names.arg = c("Without Hypertension", "With Hypertension"))
+```
+
+```{r}
+colors <- c("royalblue", "tomato")
+tbl <- with(data, table(heart_disease, stroke))
+barplot(tbl, legend = TRUE, legend.text = c("Without heart disease", "With heart disease"),
+        beside = TRUE, col = colors,
+        names.arg = c('No Stroke', 'Stroke'), 
+        main = "Stroke events by heart disease background")
+barplot(tbl[, 2], col = colors, main = "Confirmed stroke events by heart disease background",
+        names.arg = c("Without heart disease", "With heart disease"))
+```
+
+```{r}
+hist(data$bmi, col = "royalblue", main = "BMI distribution", xlab = 'BMI')
+hist(data$avg_glucose_level, col = "tomato", main = "Average glucose levels",
+     xlab = "Average glucose levels")
+```
+
+```{r}
+data$age <- (data$age - mean(data$age)) / sd(data$age)
+data$bmi <- (data$bmi - mean(data$bmi)) / sd(data$bmi)
+data$avg_glucose_level <- (data$avg_glucose_level - mean(data$avg_glucose_level)) / sd(data$avg_glucose_level)
+```
+
+```{r}
+dummy <- dummyVars(" ~ . ", data = data)
+data <- data.frame(predict(dummy, newdata = data))
+table(data$stroke)
+```
+
+## Sampling Imbalance Data
+
+```{r}
+oversampled <- mwmote(data, classAttr = "stroke", numInstances = 500)
+oversampled <- round(oversampled)
+set.seed(1203)
+fullData <- rbind(data, oversampled)
+```
+
+```{r}
+fullData$stroke <- factor(fullData$stroke)
+```
+
+```{r}
+sample <- createDataPartition(y = fullData$stroke, p = 0.8, list = FALSE)
+train <- fullData[sample, ]
+test <- fullData[-sample, ]
+train_control <- trainControl(method = "cv", number = 5)
+```
+
+## Random Forest
+
+```{r warning = False, message = False}
+rand.rf <- randomForest(as.factor(stroke) ~ ., data = train, ntree = 500, 
+                        mtry = 4, nodesize = 5, importance = TRUE) 
+rand.rf.pred <- predict(rand.rf, test)
+ex <- confusionMatrix(rand.rf.pred, as.factor(test$stroke))
+print(ex)
+varImpPlot(rand.rf, type = 1)
+fourfoldplot(ex$table, color = c("cyan", "pink"),conf.level = 0, margin = 1, main = "Confusion Matrix")
+plot_confusion_matrix(rand.rf.pred)
+```
+
+```{r}
+knn <- train(stroke~., data = train, method = "knn", trControl = train_control)
+knn.rf.pred <- predict(knn, test)
+knnModel <- confusionMatrix(knn.rf.pred, as.factor(test$stroke))
+print(knnModel)
+fourfoldplot(knnModel$table, color = c("cyan", "pink"),conf.level = 0, margin = 1, main = "Confusion Matrix")
+plot_confusion_matrix(knnModel)
+```
+
+## Logistic Regression
+
+```{r}
+logit.reg <- glm(stroke ~ ., data = train, family = "binomial")
+logit.reg.pred <- predict(logit.reg, test, type = "response")
+
+logit.reg.pred.stroke <- ifelse(logit.reg.pred>0.5,1,0)
+logist <- confusionMatrix(as.factor(logit.reg.pred.stroke),
+                          as.factor(test$stroke))
+print(logist)
+fourfoldplot(logist$table, color = c("cyan", "pink"),conf.level = 0, margin = 1, main = "Confusion Matrix")
+plot_confusion_matrix(logist)
+```
+
+## Neural Network
+
+```{r}
+library(neuralnet)
+library(nnet)
+library(caret)
+indx <- sapply(train, is.factor)
+train[indx] <- lapply(train[indx], function(x) as.numeric(as.character(x)))
+nn<-neuralnet(stroke ~ .,data=train,hidden = c(4,2),linear.output = FALSE)
+nn.pred <- predict(nn,test)
+nnist <- confusionMatrix(nn.pred, as.factor(test$stroke))
+# Ensemble using Weighted Average
+# Taking weighted average of predictions
+test$pred_weighted<-(as.numeric(rand.rf.pred)*0.25)+(as.numeric(logit.reg.pred)*0.25)
+#Splitting into binary classes at 0.5
+test$pred_weighted<-as.factor(ifelse(test$pred_weighted>0.5,'1','0'))
+ense<-confusionMatrix(as.factor(test$stroke),as.factor(test$pred_weighted))
+ense
+fourfoldplot(ense$table, color = c("cyan", "pink"),conf.level = 0, margin = 1, main = "Confusion Matrix")
+plot_confusion_matrix(ense)
+```
+
